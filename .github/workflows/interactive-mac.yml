@@ -1,82 +1,77 @@
-name: Working Mac VNC with Display
-on: workflow_dispatch
+# Reverse MacOS VNC for GitHub Actions
+# This YAML establishes the "build" workflow where we will execute all required scripts
+# During the process, it should get stuck at the last step where it creates a new tunnel on ngrok.
 
+name: macOS
+on: [push]
+defaults:
+  run:
+    shell: bash
 jobs:
-  mac-vnc:
+  build:
     runs-on: macos-latest
     steps:
-      - name: Setup VNC with Display
-        run: |
-          brew install x11vnc
-          mkdir -p ~/.vnc
-          x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
-          
-          # デスクトップ環境を起動
-          # macOSの場合は少し違うアプローチが必要
-          open -a Terminal &
-          open -a Safari &
-          
-          # x11vncを起動
-          x11vnc -display :1 -forever -shared -rfbauth ~/.vnc/passwd &
-          sleep 5
-
-      - name: Alternative - Use built-in Screen Sharing
-        run: |
-          # macOSの内蔵Screen Sharingを試す
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw "${{ secrets.VNC_PASSWORD }}" \
-            -restart -agent -privs -all
-          
-          # または、シンプルにアプリを起動
-          open -a Calculator
-          open -a TextEdit
-          
-          # VNCを再起動
-          pkill x11vnc || true
-          x11vnc -create -geometry 1280x720 -forever -shared -rfbauth ~/.vnc/passwd -bg -o /tmp/x11vnc.log &
-          sleep 10
-
-      - name: Setup noVNC
-        run: |
-          git clone https://github.com/novnc/noVNC.git
-          cd noVNC
-          
-          # 統合プロキシを使用
-          ./utils/novnc_proxy --vnc 127.0.0.1:5900 --listen 127.0.0.1:6080 &
-          sleep 5
-
-      - name: Setup ngrok
-        run: |
-          brew install ngrok
-          ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-          ngrok http 127.0.0.1:6080 &
-          sleep 10
-          
-          URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          
-          echo "=========================================="
-          echo "🌐 ブラウザでアクセス:"
-          echo "$URL"
-          echo ""
-          echo "パスワード: Your VNC_PASSWORD"
-          echo ""
-          echo "💡 もし画面が真っ暗な場合:"
-          echo "   - 少し待ってからリフレッシュ"
-          echo "   - VNC接続後、マウスを動かしてみる"
-          echo "=========================================="
-
-      - name: Debug Display
-        run: |
-          echo "=== Display Status ==="
-          echo "DISPLAY=$DISPLAY"
-          
-          # x11vncのログ確認
-          cat /tmp/x11vnc.log 2>/dev/null | tail -20 || echo "No log file"
-          
-          # プロセス確認
-          ps aux | grep -E "(Xvfb|x11vnc)" | grep -v grep
-
-      - name: Keep Alive
-        run: sleep 21600
+    - uses: actions/checkout@v2
+    - name: Preparing environment...
+      env:
+        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+      # legacy run command script-- run: ./scripts/configure-legacy.sh
+      run: |
+        # Install ngrok
+        brew install ngrok/ngrok/ngrok
+        # Authenticate ngrok
+        ngrok config add-authtoken $NGROK_AUTH_TOKEN
+    - name: Install Remote Access Tools
+      run: |
+        # Install noVNC for web-based access
+        git clone https://github.com/novnc/noVNC.git ~/noVNC
+        git clone https://github.com/novnc/websockify.git ~/websockify
+        # Install Python dependencies
+        pip3 install websockify
+    - name: Setup Terminal Web Interface
+      run: |
+        # Install ttyd for web-based terminal access
+        brew install ttyd
+        # Create a simple web interface
+        mkdir -p ~/web-interface
+    - name: Starting Web Terminal...
+      env:
+        VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+      run: |
+        # Start web-based terminal interface
+        ttyd -p 7681 -W bash &
+        sleep 2
+        echo "Web terminal started on port 7681"
+        # Create a simple status page
+        cat > ~/web-interface/index.html << 'EOF'
+        <!DOCTYPE html>
+        <html>
+        <head><title>macOS GitHub Actions</title></head>
+        <body>
+        <h1>macOS GitHub Actions Remote Access</h1>
+        <p>Terminal access available</p>
+        <p>System: $(uname -a)</p>
+        <p>Time: $(date)</p>
+        </body>
+        </html>
+        EOF
+        # Start simple web server for status
+        python3 -m http.server 8080 -d ~/web-interface &
+    - name: Creating tunnel with ngrok...
+      run: |
+        # Start ngrok HTTP tunnel for web terminal (free tier supports HTTP)
+        ngrok http 7681 --log stdout &
+        sleep 10
+        # Show connection info
+        echo "=== macOS Remote Access Information ==="
+        echo "Terminal URL:"
+        curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | cut -d'"' -f4
+        echo ""
+        echo "System Information:"
+        uname -a
+        echo "Current User: $(whoami)"
+        echo "Home Directory: $HOME"
+        echo "Available Tools: $(which brew git python3 node)"
+        # Keep the workflow running
+        while true; do sleep 30; done
