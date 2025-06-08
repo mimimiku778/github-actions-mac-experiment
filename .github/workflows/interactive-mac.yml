@@ -26,6 +26,8 @@ jobs:
       run: |
         # Install VNC server and tools
         brew install x11vnc
+        # Install window manager for VNC
+        brew install fluxbox
         # Install noVNC for web-based VNC access
         git clone https://github.com/novnc/noVNC.git ~/noVNC
         git clone https://github.com/novnc/websockify.git ~/websockify
@@ -46,8 +48,10 @@ jobs:
         VNC_DEPTHVALUE=${VNC_DEPTHVALUE:-24}
         VNC_PASSWORD=${VNC_PASSWORD:-vncpass}
         
-        # Setup VNC password
-        echo $VNC_PASSWORD | vncpasswd -f > ~/.vnc/passwd
+        # Setup VNC password (alternative method for macOS)
+        mkdir -p ~/.vnc
+        # Create VNC password file manually (since vncpasswd may not be available)
+        echo "$VNC_PASSWORD" > ~/.vnc/passwd
         chmod 600 ~/.vnc/passwd
         
         # Start virtual display (using system's built-in capabilities)
@@ -56,8 +60,9 @@ jobs:
         # Try to start VNC using macOS screen sharing
         sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -clientopts -setvncpw -vncpw $VNC_PASSWORD -restart -agent -privs -all 2>/dev/null || echo "Screen sharing setup attempted"
         
-        # Alternative: Start x11vnc with fake display
-        x11vnc -create -env FD_PROG=/usr/bin/fluxbox -env X11VNC_FINDDISPLAY_ALWAYS_FAILS=1 -env X11VNC_CREATE_GEOM=${VNC_SCREENSIZE} -forever -usepw -passwd $VNC_PASSWORD -rfbport 5900 -shared &
+        # Start x11vnc with virtual display
+        x11vnc -create -env FD_PROG=/usr/bin/fluxbox -env X11VNC_FINDDISPLAY_ALWAYS_FAILS=1 -env X11VNC_CREATE_GEOM=${VNC_SCREENSIZE} -forever -passwd $VNC_PASSWORD -rfbport 5900 -shared -noxdamage &
+        sleep 3
         
         # Start noVNC web interface
         /usr/bin/python3 ~/websockify/websockify --web ~/noVNC 6080 localhost:5900 &
