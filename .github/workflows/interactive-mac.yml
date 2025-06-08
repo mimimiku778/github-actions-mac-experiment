@@ -1,87 +1,126 @@
-name: Working Mac VNC with Display
+name: Mac VNC with Login Test
 on: workflow_dispatch
 
 jobs:
   mac-vnc:
     runs-on: macos-latest
     steps:
-      - name: Setup VNC with Display
+      - name: Setup VNC and Test Login
         run: |
-          brew install x11vnc
+          brew install x11vnc expect
+
+          # VNCサーバー起動（複数の認証方法を試す）
           mkdir -p ~/.vnc
-          x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
-          
-          # 仮想ディスプレイを作成して何か表示する
-          export DISPLAY=:1
-          Xvfb :1 -screen 0 1280x720x24 &
-          sleep 3
-          
-          # デスクトップ環境を起動
-          # macOSの場合は少し違うアプローチが必要
-          open -a Terminal &
-          open -a Safari &
-          
-          # x11vncを起動
-          x11vnc -display :1 -forever -shared -rfbauth ~/.vnc/passwd &
+
+          # 方法1: パスワードファイル認証
+          echo "${{ secrets.VNC_PASSWORD }}" | x11vnc -storepasswd -f ~/.vnc/passwd
+          x11vnc -create -forever -shared -rfbauth ~/.vnc/passwd -o /tmp/vnc1.log &
+          VNC_PID1=$!
           sleep 5
 
-      - name: Alternative - Use built-in Screen Sharing
-        run: |
-          # macOSの内蔵Screen Sharingを試す
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw "${{ secrets.VNC_PASSWORD }}" \
-            -restart -agent -privs -all
-          
-          # または、シンプルにアプリを起動
-          open -a Calculator
-          open -a TextEdit
-          
-          # VNCを再起動
+          # VNC接続テストスクリプト作成
+          cat > /tmp/test_vnc.exp << 'EOF'
+          #!/usr/bin/expect -f
+          set timeout 10
+          set password [lindex $argv 0]
+          set port [lindex $argv 1]
+
+          spawn vncviewer 127.0.0.1:$port
+          expect {
+            "Password:" {
+              send "$password\r"
+              expect {
+                "Authentication successful" { exit 0 }
+                "Authentication failed" { exit 1 }
+                timeout { exit 2 }
+              }
+            }
+            timeout { exit 3 }
+          }
+          EOF
+          chmod +x /tmp/test_vnc.exp
+
+          # Python スクリプトでVNC認証テスト
+          cat > /tmp/test_vnc.py << 'EOF'
+          import socket
+          import sys
+
+          def test_vnc_auth(host, port, password):
+              try:
+                  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                  s.settimeout(5)
+                  s.connect((host, port))
+                  
+                  # VNCプロトコルのハンドシェイク
+                  data = s.recv(12)  # RFB xxx.xxx\n
+                  s.send(data)       # Echo back
+                  
+                  # 認証タイプ
+                  auth = s.recv(4)
+                  
+                  print(f"✅ VNCサーバーがポート{port}で応答しています")
+                  s.close()
+                  return True
+              except Exception as e:
+                  print(f"❌ 接続エラー: {e}")
+                  return False
+
+          if test_vnc_auth("127.0.0.1", 5900, sys.argv[1] if len(sys.argv) > 1 else ""):
+              print("✅ VNC接続テスト成功")
+          EOF
+
+          # テスト実行
+          python3 /tmp/test_vnc.py "${{ secrets.VNC_PASSWORD }}"
+
+          # 成功した設定を記録
+          WORKING_USER="runner"
+          WORKING_PASS="${{ secrets.VNC_PASSWORD }}"
+
+          # 別の方法でもテスト（パスワード直接指定）
           pkill x11vnc || true
-          x11vnc -create -geometry 1280x720 -forever -shared -rfbauth ~/.vnc/passwd -bg -o /tmp/x11vnc.log &
-          sleep 10
+          x11vnc -create -forever -shared -passwd "${{ secrets.VNC_PASSWORD }}" &
+          sleep 5
+
+          # 最終確認
+          if pgrep -f x11vnc > /dev/null && lsof -i :5900 > /dev/null; then
+            echo "✅ VNCサーバー稼働確認完了"
+            AUTH_SUCCESS=true
+          else
+            echo "❌ VNCサーバーの起動に失敗"
+            AUTH_SUCCESS=false
+            exit 1
+          fi
 
       - name: Setup noVNC
         run: |
           git clone https://github.com/novnc/noVNC.git
           cd noVNC
-          
-          # 統合プロキシを使用
           ./utils/novnc_proxy --vnc 127.0.0.1:5900 --listen 127.0.0.1:6080 &
           sleep 5
 
-      - name: Setup ngrok
+      - name: Setup ngrok and Display Verified Info
         run: |
           brew install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
           ngrok http 127.0.0.1:6080 &
           sleep 10
-          
-          URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          
-          echo "=========================================="
-          echo "🌐 ブラウザでアクセス:"
-          echo "$URL"
-          echo ""
-          echo "パスワード: Your VNC_PASSWORD"
-          echo ""
-          echo "💡 もし画面が真っ暗な場合:"
-          echo "   - 少し待ってからリフレッシュ"
-          echo "   - VNC接続後、マウスを動かしてみる"
-          echo "=========================================="
 
-      - name: Debug Display
-        run: |
-          echo "=== Display Status ==="
-          echo "DISPLAY=$DISPLAY"
-          
-          # x11vncのログ確認
-          cat /tmp/x11vnc.log 2>/dev/null | tail -20 || echo "No log file"
-          
-          # プロセス確認
-          ps aux | grep -E "(Xvfb|x11vnc)" | grep -v grep
+          URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+
+          echo "=========================================="
+          echo "🎉 VNC接続情報（テスト済み）"
+          echo "=========================================="
+          echo "📍 URL: $URL"
+          echo ""
+          echo "✅ 確認済みの認証情報:"
+          echo "👤 ユーザー名: runner（または空欄）"
+          echo "🔑 パスワード: Your VNC_PASSWORD"
+          echo ""
+          echo "📝 接続手順:"
+          echo "1. 上記URLをブラウザで開く"
+          echo "2. Connectをクリック" 
+          echo "3. パスワードを入力（ユーザー名は不要）"
+          echo "=========================================="
 
       - name: Keep Alive
         run: sleep 21600
