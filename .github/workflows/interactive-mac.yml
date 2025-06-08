@@ -32,13 +32,16 @@ jobs:
       env:
         VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
       run: |
-        # Start web-based terminal interface
-        ttyd -p 7681 -W bash &
+        # Setup shell environment (use zsh without changing system shell)
+        export SHELL=/bin/zsh
+        # Start web-based terminal interface with zsh
+        ttyd -p 7681 -W /bin/zsh &
         sleep 2
-        echo "Web terminal started on port 7681"
+        echo "Web terminal started on port 7681 with zsh"
         # Create a simple HTML page showing system info
         echo "macOS GitHub Actions Terminal Ready" > ~/status.txt
         echo "System: $(uname -a)" >> ~/status.txt
+        echo "Shell: $SHELL" >> ~/status.txt
         echo "Time: $(date)" >> ~/status.txt
         cat ~/status.txt
     - name: Creating tunnel with ngrok...
@@ -63,7 +66,13 @@ jobs:
         echo "   OS: $(uname -s) $(uname -r)"
         echo "   User: $(whoami)"
         echo "   Home: $HOME"
+        echo "   Shell: $SHELL"
         echo "   Tools: $(which brew git python3 node | tr '\n' ' ')"
+        echo ""
+        echo "🔑 Important Notes:"
+        echo "   - User 'runner' has no password set"
+        echo "   - If prompted for password, just press Enter"
+        echo "   - Or use: sudo -n (no password sudo for some commands)"
         echo ""
         echo "⚡ Access your macOS terminal in browser:"
         echo "   Open: $NGROK_URL"
