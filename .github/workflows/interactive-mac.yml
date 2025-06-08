@@ -1,48 +1,56 @@
-name: Fixed Mac VNC Access
+name: Working Mac VNC
 on: workflow_dispatch
 
 jobs:
   mac-vnc:
     runs-on: macos-latest
     steps:
-      - name: Complete Setup
+      - name: Setup VNC
         run: |
-          # VNC設定
           brew install x11vnc
           mkdir -p ~/.vnc
           x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
           x11vnc -create -forever -shared -rfbauth ~/.vnc/passwd &
           sleep 5
-          
-          # noVNC設定（正しい方法）
+
+      - name: Setup noVNC with IPv4
+        run: |
+          # noVNCをクローン
           git clone https://github.com/novnc/noVNC.git
           cd noVNC
           
-          # WebSocketプロキシを正しく起動
-          python3 -m websockify --web=. 6080 localhost:5900 &
+          # IPv4（127.0.0.1）を明示的に使用
+          python3 -m http.server 6080 --bind 127.0.0.1 &
+          sleep 3
+          
+          # WebSocketプロキシもIPv4で起動
+          ./utils/websockify/websockify.py --web=. 127.0.0.1:6081 127.0.0.1:5900 &
           sleep 5
           
-          # ファイル確認
-          echo "=== noVNC files check ==="
-          ls -la vnc.html || echo "vnc.html not found!"
-          pwd
-          
-          # ngrok設定
+          # ポート確認
+          echo "=== Port check ==="
+          netstat -an | grep LISTEN | grep -E "(6080|6081|5900)"
+
+      - name: Setup ngrok with IPv4
+        run: |
           brew install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-          ngrok http 6080 &
+          
+          # IPv4を明示的に指定
+          ngrok http 127.0.0.1:6080 &
           sleep 10
           
-          URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          # テスト
+          echo "=== Local test ==="
+          curl -I http://127.0.0.1:6080 || echo "Failed to connect"
+          
+          URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           
           echo "=========================================="
-          echo "🌐 アクセスURL（これをクリック）:"
-          echo ""
+          echo "🌐 ブラウザでアクセス:"
           echo "$URL/vnc.html"
           echo ""
-          echo "ページが開いたら:"
-          echo "1. Connectボタンをクリック"
-          echo "2. パスワード入力: Your VNC_PASSWORD"
+          echo "パスワード: Your VNC_PASSWORD"
           echo "=========================================="
 
       - name: Keep Alive
