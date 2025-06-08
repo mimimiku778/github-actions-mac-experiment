@@ -1,50 +1,87 @@
-name: Browser-based Mac Desktop
+name: Interactive Mac Environment
 on: workflow_dispatch
 
 jobs:
-  browser-mac:
+  interactive-mac:
     runs-on: macos-latest
     steps:
-      - name: Setup Full Desktop Access
+      - name: Setup VNC Server
         run: |
-          # VNCサーバー起動
           brew install x11vnc
           mkdir -p ~/.vnc
           x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
-
-          # フルデスクトップを配信（仮想ディスプレイ作成）
           x11vnc -create -geometry 1280x720 -forever -shared -rfbauth ~/.vnc/passwd -rfbport 5900 &
           sleep 5
+          
+          # VNCが起動したか確認
+          echo "VNC Server check:"
+          lsof -i :5900 || echo "VNC not listening on 5900"
 
-      - name: Setup noVNC Web Interface
+      - name: Setup noVNC
         run: |
-          # noVNCダウンロード
+          # noVNCをクローン
           git clone --depth 1 https://github.com/novnc/noVNC.git
           cd noVNC
-
-          # WebSocketプロキシ起動
-          ./utils/launch.sh --vnc localhost:5900 --listen 6080 &
+          
+          # Pythonで簡易HTTPサーバーとWebSocketプロキシを起動
+          python3 -m http.server 6080 &
+          sleep 2
+          
+          # WebSocketプロキシを別ポートで起動
+          ./utils/websockify/run 6081 localhost:5900 &
           sleep 5
+          
+          # ポート確認
+          echo "Port check:"
+          lsof -i :6080 || echo "HTTP server not listening on 6080"
+          lsof -i :6081 || echo "WebSocket proxy not listening on 6081"
 
-      - name: Create ngrok Tunnel
+      - name: Alternative Setup with single command
+        run: |
+          cd noVNC
+          # launch.shを使用（これが最も確実）
+          ./utils/launch.sh --vnc localhost:5900 --listen 6080 &
+          sleep 10
+          
+          # 再度ポート確認
+          echo "Final port check:"
+          lsof -i :6080
+
+      - name: Setup ngrok
         run: |
           brew install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
           ngrok http 6080 &
           sleep 10
-
+          
           URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          
+          echo "=========================================="
+          echo "🌐 ブラウザアクセスURL:"
+          echo "$URL"
+          echo ""
+          echo "接続後、以下を使用:"
+          echo "Host: localhost"
+          echo "Port: 5900"
+          echo "Password: Your VNC_PASSWORD"
+          echo "=========================================="
 
-          echo "=========================================="
-          echo "🖥️ ブラウザでmacOSデスクトップにアクセス"
-          echo ""
-          echo "📱 自動接続URL:"
-          echo "$URL/vnc.html?autoconnect=true&password=${{ secrets.VNC_PASSWORD }}"
-          echo ""
-          echo "🔐 手動接続URL:"
-          echo "$URL/vnc.html"
-          echo "（パスワード: Your VNC_PASSWORD）"
-          echo "=========================================="
+      - name: Debug Services
+        run: |
+          echo "=== Running processes ==="
+          ps aux | grep -E "(vnc|websock|python)" | grep -v grep
+          
+          echo -e "\n=== Listening ports ==="
+          lsof -i -P | grep LISTEN
+          
+          echo -e "\n=== Test local connection ==="
+          curl -I http://localhost:6080 || echo "Cannot reach port 6080"
 
       - name: Keep Alive
-        run: sleep 21600
+        run: |
+          while true; do
+            echo "[$(date '+%H:%M:%S')] Active..."
+            # サービスが死んでいたら再起動
+            pgrep -f "websockify" || (cd noVNC && ./utils/launch.sh --vnc localhost:5900 --listen 6080 &)
+            sleep 300
+          done
