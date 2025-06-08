@@ -22,14 +22,7 @@ jobs:
         brew install ngrok/ngrok/ngrok
         # Authenticate ngrok
         ngrok config add-authtoken $NGROK_AUTH_TOKEN
-    - name: Install Remote Access Tools
-      run: |
-        # Install noVNC for web-based access
-        git clone https://github.com/novnc/noVNC.git ~/noVNC
-        git clone https://github.com/novnc/websockify.git ~/websockify
-        # Install Python dependencies
-        pip3 install websockify
-    - name: Setup Terminal Web Interface
+    - name: Install Terminal Web Interface
       run: |
         # Install ttyd for web-based terminal access
         brew install ttyd
@@ -43,35 +36,44 @@ jobs:
         ttyd -p 7681 -W bash &
         sleep 2
         echo "Web terminal started on port 7681"
-        # Create a simple status page
-        cat > ~/web-interface/index.html << 'EOF'
-        <!DOCTYPE html>
-        <html>
-        <head><title>macOS GitHub Actions</title></head>
-        <body>
-        <h1>macOS GitHub Actions Remote Access</h1>
-        <p>Terminal access available</p>
-        <p>System: $(uname -a)</p>
-        <p>Time: $(date)</p>
-        </body>
-        </html>
-        EOF
-        # Start simple web server for status
-        python3 -m http.server 8080 -d ~/web-interface &
+        # Create a simple HTML page showing system info
+        echo "macOS GitHub Actions Terminal Ready" > ~/status.txt
+        echo "System: $(uname -a)" >> ~/status.txt
+        echo "Time: $(date)" >> ~/status.txt
+        cat ~/status.txt
     - name: Creating tunnel with ngrok...
       run: |
         # Start ngrok HTTP tunnel for web terminal (free tier supports HTTP)
         ngrok http 7681 --log stdout &
-        sleep 10
-        # Show connection info
-        echo "=== macOS Remote Access Information ==="
-        echo "Terminal URL:"
-        curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | cut -d'"' -f4
+        sleep 15
+        # Show connection info clearly
         echo ""
-        echo "System Information:"
-        uname -a
-        echo "Current User: $(whoami)"
-        echo "Home Directory: $HOME"
-        echo "Available Tools: $(which brew git python3 node)"
-        # Keep the workflow running
-        while true; do sleep 30; done
+        echo "=============================================="
+        echo "🚀 macOS GitHub Actions Remote Access Ready!"
+        echo "=============================================="
+        echo ""
+        
+        # Get ngrok URL
+        NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | cut -d'"' -f4)
+        
+        echo "📱 Terminal Access URL:"
+        echo "   $NGROK_URL"
+        echo ""
+        echo "💻 System Information:"
+        echo "   OS: $(uname -s) $(uname -r)"
+        echo "   User: $(whoami)"
+        echo "   Home: $HOME"
+        echo "   Tools: $(which brew git python3 node | tr '\n' ' ')"
+        echo ""
+        echo "⚡ Access your macOS terminal in browser:"
+        echo "   Open: $NGROK_URL"
+        echo ""
+        echo "=============================================="
+        echo "🔄 Keeping session alive..."
+        echo "=============================================="
+        
+        # Keep the workflow running and show URL periodically
+        while true; do 
+          sleep 60
+          echo "🕐 $(date): Session active - URL: $NGROK_URL"
+        done
