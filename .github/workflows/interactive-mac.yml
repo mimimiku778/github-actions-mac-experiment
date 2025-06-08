@@ -1,104 +1,40 @@
-name: Mac VNC with Login Verification
+name: Simple Working Mac VNC
 on: workflow_dispatch
 
 jobs:
   mac-vnc:
     runs-on: macos-latest
     steps:
-      - name: Setup and Test VNC
+      - name: Setup VNC
         run: |
           brew install x11vnc
-          
-          # VNCサーバー起動
           mkdir -p ~/.vnc
-          echo "${{ secrets.VNC_PASSWORD }}" | x11vnc -storepasswd -f ~/.vnc/passwd
-          chmod 600 ~/.vnc/passwd
-          
-          # macOS用：createオプションで仮想ディスプレイ作成
+          x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
           x11vnc -create -forever -shared -rfbauth ~/.vnc/passwd &
-          sleep 10
-          
-          # VNCサーバーの状態確認
-          echo "=== VNCサーバー確認 ==="
-          if pgrep -f x11vnc > /dev/null; then
-            echo "✅ x11vncプロセス: 稼働中"
-          else
-            echo "❌ x11vncプロセス: 停止"
-            exit 1
-          fi
-          
-          if lsof -i :5900 > /dev/null; then
-            echo "✅ ポート5900: リスニング中"
-          else
-            echo "❌ ポート5900: 閉じています"
-            exit 1
-          fi
-          
-          # Pythonで簡易VNC接続テスト
-          python3 -c "
-          import socket
-          try:
-              s = socket.socket()
-              s.settimeout(5)
-              s.connect(('127.0.0.1', 5900))
-              data = s.recv(12)
-              if b'RFB' in data:
-                  print('✅ VNCプロトコル応答: OK')
-                  print(f'   バージョン: {data.decode().strip()}')
-              s.close()
-          except Exception as e:
-              print(f'❌ 接続エラー: {e}')
-              exit(1)
-          "
-          
-          echo ""
-          echo "✅ VNCサーバーのセットアップと確認が完了しました"
-          echo "   認証方式: パスワード認証"
-          echo "   ユーザー名: 不要"
-          echo "   パスワード: 設定済み（VNC_PASSWORD）"
+          sleep 5
 
       - name: Setup noVNC
         run: |
           git clone https://github.com/novnc/noVNC.git
           cd noVNC
-          ./utils/novnc_proxy --vnc 127.0.0.1:5900 --listen 127.0.0.1:6080 &
-          sleep 5
-          
-          # noVNCの動作確認
-          if curl -s http://127.0.0.1:6080 > /dev/null; then
-            echo "✅ noVNC Webサーバー: 稼働中"
-          else
-            echo "❌ noVNC Webサーバー: エラー"
-            exit 1
-          fi
 
-      - name: Setup ngrok and Show Info
+          # シンプルな起動方法
+          ./utils/launch.sh --vnc localhost:5900 --listen 6080 &
+          sleep 10
+
+      - name: Setup ngrok
         run: |
           brew install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
           ngrok http 127.0.0.1:6080 &
           sleep 10
-          
+
           URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          
-          if [ -z "$URL" ] || [ "$URL" = "null" ]; then
-            echo "❌ ngrok URLの取得に失敗"
-            exit 1
-          fi
-          
-          echo ""
+
           echo "=========================================="
-          echo "🎉 VNC接続準備完了（全テスト合格）"
-          echo "=========================================="
-          echo "📍 URL: $URL"
-          echo ""
-          echo "✅ 動作確認済みの認証情報:"
-          echo "👤 ユーザー名: 不要（空欄でOK）"
+          echo "📍 URL: $URL/vnc.html"
+          echo "👤 ユーザー名: 不要"
           echo "🔑 パスワード: Your VNC_PASSWORD"
-          echo ""
-          echo "💡 もしユーザー名を求められたら:"
-          echo "   - 空欄のまま進む"
-          echo "   - または「runner」と入力"
           echo "=========================================="
 
       - name: Keep Alive
