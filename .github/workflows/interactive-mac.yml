@@ -5,30 +5,33 @@ jobs:
   interactive-mac:
     runs-on: macos-latest
     steps:
-      - name: Setup VNC
+      - name: Setup VNC Server
         run: |
           brew install x11vnc
           mkdir -p ~/.vnc
           x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
           x11vnc -create -forever -shared -rfbauth ~/.vnc/passwd -rfbport 5900 &
 
-      - name: Setup ngrok
+      - name: Setup noVNC
+        run: |
+          git clone --depth 1 https://github.com/novnc/noVNC.git
+          cd noVNC
+          ./utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
+          sleep 3
+
+      - name: Setup ngrok HTTP
         run: |
           brew install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-          ngrok tcp 5900 &
+          ngrok http 6080 &
           sleep 10
           
-          TCP_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          WEB_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           
           echo "=========================================="
-          echo "VNC URL: $TCP_URL"
-          echo "Password: Your VNC_PASSWORD"
+          echo "🌐 ブラウザでアクセス: $WEB_URL"
+          echo "🔑 Password: Your VNC_PASSWORD"
           echo "=========================================="
 
       - name: Keep Alive
-        run: |
-          while true; do
-            echo "[$(date '+%H:%M:%S')] Running..."
-            sleep 300
-          done
+        run: sleep 21600
