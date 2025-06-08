@@ -1,57 +1,87 @@
-name: Working Mac VNC
+name: Working Mac VNC with Display
 on: workflow_dispatch
 
 jobs:
   mac-vnc:
     runs-on: macos-latest
     steps:
-      - name: Setup VNC
+      - name: Setup VNC with Display
         run: |
           brew install x11vnc
           mkdir -p ~/.vnc
           x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
-          x11vnc -create -forever -shared -rfbauth ~/.vnc/passwd &
+          
+          # 仮想ディスプレイを作成して何か表示する
+          export DISPLAY=:1
+          Xvfb :1 -screen 0 1280x720x24 &
+          sleep 3
+          
+          # デスクトップ環境を起動
+          # macOSの場合は少し違うアプローチが必要
+          open -a Terminal &
+          open -a Safari &
+          
+          # x11vncを起動
+          x11vnc -display :1 -forever -shared -rfbauth ~/.vnc/passwd &
           sleep 5
 
-      - name: Setup noVNC with IPv4
+      - name: Alternative - Use built-in Screen Sharing
         run: |
-          # noVNCをクローン
+          # macOSの内蔵Screen Sharingを試す
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -clientopts -setvncpw -vncpw "${{ secrets.VNC_PASSWORD }}" \
+            -restart -agent -privs -all
+          
+          # または、シンプルにアプリを起動
+          open -a Calculator
+          open -a TextEdit
+          
+          # VNCを再起動
+          pkill x11vnc || true
+          x11vnc -create -geometry 1280x720 -forever -shared -rfbauth ~/.vnc/passwd -bg -o /tmp/x11vnc.log &
+          sleep 10
+
+      - name: Setup noVNC
+        run: |
           git clone https://github.com/novnc/noVNC.git
           cd noVNC
           
-          # IPv4（127.0.0.1）を明示的に使用
-          python3 -m http.server 6080 --bind 127.0.0.1 &
-          sleep 3
-          
-          # WebSocketプロキシもIPv4で起動
-          ./utils/websockify/websockify.py --web=. 127.0.0.1:6081 127.0.0.1:5900 &
+          # 統合プロキシを使用
+          ./utils/novnc_proxy --vnc 127.0.0.1:5900 --listen 127.0.0.1:6080 &
           sleep 5
-          
-          # ポート確認
-          echo "=== Port check ==="
-          netstat -an | grep LISTEN | grep -E "(6080|6081|5900)"
 
-      - name: Setup ngrok with IPv4
+      - name: Setup ngrok
         run: |
           brew install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-          
-          # IPv4を明示的に指定
           ngrok http 127.0.0.1:6080 &
           sleep 10
-          
-          # テスト
-          echo "=== Local test ==="
-          curl -I http://127.0.0.1:6080 || echo "Failed to connect"
           
           URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           
           echo "=========================================="
           echo "🌐 ブラウザでアクセス:"
-          echo "$URL/vnc.html"
+          echo "$URL"
           echo ""
           echo "パスワード: Your VNC_PASSWORD"
+          echo ""
+          echo "💡 もし画面が真っ暗な場合:"
+          echo "   - 少し待ってからリフレッシュ"
+          echo "   - VNC接続後、マウスを動かしてみる"
           echo "=========================================="
+
+      - name: Debug Display
+        run: |
+          echo "=== Display Status ==="
+          echo "DISPLAY=$DISPLAY"
+          
+          # x11vncのログ確認
+          cat /tmp/x11vnc.log 2>/dev/null | tail -20 || echo "No log file"
+          
+          # プロセス確認
+          ps aux | grep -E "(Xvfb|x11vnc)" | grep -v grep
 
       - name: Keep Alive
         run: sleep 21600
