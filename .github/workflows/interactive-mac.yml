@@ -17,10 +17,10 @@ jobs:
         run: |
           git clone https://github.com/novnc/noVNC.git
           cd noVNC
-
-          # シンプルな起動方法
-          ./utils/launch.sh --vnc localhost:5900 --listen 6080 &
-          sleep 10
+          
+          # 統合プロキシを使用
+          ./utils/novnc_proxy --vnc 127.0.0.1:5900 --listen 127.0.0.1:6080 &
+          sleep 5
 
       - name: Setup ngrok
         run: |
