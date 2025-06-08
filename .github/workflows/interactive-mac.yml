@@ -1,41 +1,42 @@
-name: Simple Working Mac VNC
+name: Simplified Mac VNC
 on: workflow_dispatch
 
 jobs:
-  mac-vnc:
+  simple-vnc:
     runs-on: macos-latest
     steps:
-      - name: Setup VNC
+      - name: All in One
         run: |
+          # VNCサーバー
           brew install x11vnc
-          mkdir -p ~/.vnc
-          x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
-          x11vnc -create -forever -shared -rfbauth ~/.vnc/passwd &
+          x11vnc -create -forever -nopw &
           sleep 5
-
-      - name: Setup noVNC
-        run: |
+          
+          # シンプルなWebサーバー + WebSocket
           git clone https://github.com/novnc/noVNC.git
           cd noVNC
           
-          # 統合プロキシを使用
-          ./utils/novnc_proxy --vnc 127.0.0.1:5900 --listen 127.0.0.1:6080 &
-          sleep 5
-
-      - name: Setup ngrok
-        run: |
+          # 統合コマンドで起動（これが最も確実）
+          ./utils/novnc_proxy --vnc 127.0.0.1:5900 --listen 127.0.0.1:8080 &
+          sleep 10
+          
+          # ポート確認
+          echo "=== Services check ==="
+          ps aux | grep -E "(vnc|proxy)" | grep -v grep
+          lsof -i :8080
+          
+          # ngrok（ポート番号を変更）
           brew install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-          ngrok http 127.0.0.1:6080 &
+          ngrok http 127.0.0.1:8080 &
           sleep 10
-
+          
           URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-
+          
           echo "=========================================="
-          echo "📍 URL: $URL/vnc.html"
-          echo "👤 ユーザー名: 不要"
-          echo "🔑 パスワード: Your VNC_PASSWORD"
+          echo "アクセス: $URL"
+          echo "（パスワードなしで接続可能）"
           echo "=========================================="
 
-      - name: Keep Alive
+      - name: Keep Alive  
         run: sleep 21600
