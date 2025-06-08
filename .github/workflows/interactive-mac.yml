@@ -22,67 +22,102 @@ jobs:
         brew install ngrok/ngrok/ngrok
         # Authenticate ngrok
         ngrok config add-authtoken $NGROK_AUTH_TOKEN
-    - name: Install Terminal Web Interface
+    - name: Install VNC and Terminal Interface
       run: |
+        # Install VNC server and tools
+        brew install x11vnc
+        # Install noVNC for web-based VNC access
+        git clone https://github.com/novnc/noVNC.git ~/noVNC
+        git clone https://github.com/novnc/websockify.git ~/websockify
         # Install ttyd for web-based terminal access
         brew install ttyd
-        # Create a simple web interface
-        mkdir -p ~/web-interface
-    - name: Starting Web Terminal...
+        # Install virtual display tools
+        brew install --cask xquartz
+        # Create directories
+        mkdir -p ~/web-interface ~/.vnc
+    - name: Setup VNC Server
       env:
         VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        VNC_SCREENSIZE: ${{ secrets.VNC_SCREENSIZE }}
+        VNC_DEPTHVALUE: ${{ secrets.VNC_DEPTHVALUE }}
       run: |
-        # Setup shell environment (use zsh without changing system shell)
+        # Set default values if not provided
+        VNC_SCREENSIZE=${VNC_SCREENSIZE:-1024x768}
+        VNC_DEPTHVALUE=${VNC_DEPTHVALUE:-24}
+        VNC_PASSWORD=${VNC_PASSWORD:-vncpass}
+        
+        # Setup VNC password
+        echo $VNC_PASSWORD | vncpasswd -f > ~/.vnc/passwd
+        chmod 600 ~/.vnc/passwd
+        
+        # Start virtual display (using system's built-in capabilities)
+        export DISPLAY=:99
+        
+        # Try to start VNC using macOS screen sharing
+        sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -clientopts -setvncpw -vncpw $VNC_PASSWORD -restart -agent -privs -all 2>/dev/null || echo "Screen sharing setup attempted"
+        
+        # Alternative: Start x11vnc with fake display
+        x11vnc -create -env FD_PROG=/usr/bin/fluxbox -env X11VNC_FINDDISPLAY_ALWAYS_FAILS=1 -env X11VNC_CREATE_GEOM=${VNC_SCREENSIZE} -forever -usepw -passwd $VNC_PASSWORD -rfbport 5900 -shared &
+        
+        # Start noVNC web interface
+        /usr/bin/python3 ~/websockify/websockify --web ~/noVNC 6080 localhost:5900 &
+        echo "VNC server and noVNC web interface started"
+        
+        # Start terminal interface
         export SHELL=/bin/zsh
-        # Start web-based terminal interface with zsh
         ttyd -p 7681 -W /bin/zsh &
-        sleep 2
-        echo "Web terminal started on port 7681 with zsh"
-        # Create a simple HTML page showing system info
-        echo "macOS GitHub Actions Terminal Ready" > ~/status.txt
+        echo "Web terminal started on port 7681"
+        
+        # Create status file
+        echo "macOS GitHub Actions VNC Ready" > ~/status.txt
         echo "System: $(uname -a)" >> ~/status.txt
-        echo "Shell: $SHELL" >> ~/status.txt
+        echo "VNC Resolution: $VNC_SCREENSIZE" >> ~/status.txt
         echo "Time: $(date)" >> ~/status.txt
         cat ~/status.txt
-    - name: Creating tunnel with ngrok...
+    - name: Creating tunnels with ngrok...
       run: |
-        # Start ngrok HTTP tunnel for web terminal (free tier supports HTTP)
-        ngrok http 7681 --log stdout &
+        # Start ngrok tunnels for both VNC and terminal
+        ngrok http 6080 --log stdout &  # VNC noVNC interface
+        sleep 5
+        ngrok http 7681 --log stdout &  # Terminal interface  
         sleep 15
+        
         # Show connection info clearly
         echo ""
         echo "=============================================="
-        echo "🚀 macOS GitHub Actions Remote Access Ready!"
+        echo "🚀 macOS GitHub Actions VNC + Terminal Ready!"
         echo "=============================================="
         echo ""
         
-        # Get ngrok URL
-        NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | cut -d'"' -f4)
+        # Get ngrok URLs
+        VNC_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.config.addr=="http://localhost:6080") | .public_url' 2>/dev/null || curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | head -1 | cut -d'"' -f4)
+        TERMINAL_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.config.addr=="http://localhost:7681") | .public_url' 2>/dev/null || curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | tail -1 | cut -d'"' -f4)
         
-        echo "📱 Terminal Access URL:"
-        echo "   $NGROK_URL"
+        echo "🖥️  VNC Desktop Access:"
+        echo "   $VNC_URL"
+        echo "   Password: ${VNC_PASSWORD:-vncpass}"
+        echo ""
+        echo "📱 Terminal Access:"
+        echo "   $TERMINAL_URL"
         echo ""
         echo "💻 System Information:"
         echo "   OS: $(uname -s) $(uname -r)"
         echo "   User: $(whoami)"
         echo "   Home: $HOME"
-        echo "   Shell: $SHELL"
-        echo "   Tools: $(which brew git python3 node | tr '\n' ' ')"
+        echo "   Resolution: ${VNC_SCREENSIZE:-1024x768}"
         echo ""
-        echo "🔑 Important Notes:"
-        echo "   - User 'runner' has no password set"
-        echo "   - If prompted for password, just press Enter"
-        echo "   - Or use: sudo -n (no password sudo for some commands)"
-        echo ""
-        echo "⚡ Access your macOS terminal in browser:"
-        echo "   Open: $NGROK_URL"
+        echo "🔑 Access Instructions:"
+        echo "   1. VNC Desktop: Open $VNC_URL in browser"
+        echo "   2. Terminal: Open $TERMINAL_URL in browser"
+        echo "   3. No password needed for user 'runner'"
         echo ""
         echo "=============================================="
         echo "🔄 Keeping session alive..."
         echo "=============================================="
         
-        # Keep the workflow running and show URL periodically
+        # Keep the workflow running and show URLs periodically
         while true; do 
-          sleep 60
-          echo "🕐 $(date): Session active - URL: $NGROK_URL"
+          sleep 120
+          echo "🕐 $(date): Session active"
+          echo "   VNC: $VNC_URL | Terminal: $TERMINAL_URL"
         done
