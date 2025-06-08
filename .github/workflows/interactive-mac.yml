@@ -9,96 +9,84 @@ jobs:
         run: |
           echo "=== System Information ==="
           sw_vers
-          whoami
-          id
+          echo "User: $(whoami)"
           echo "=== Network Info ==="
-          ifconfig | grep inet
+          ifconfig | grep "inet " | grep -v 127.0.0.1 | head -1
 
-      - name: Install and Setup VNC (Alternative Method)
+      - name: Setup VNC Server
         run: |
-          # RealVNCサーバーをインストール
-          brew install --cask vnc-server
-
-          # または、TightVNCを試す
-          brew install --cask tigervnc-viewer
+          # x11vncをインストール
+          brew install x11vnc
+          
+          # パスワードファイルを作成
+          mkdir -p ~/.vnc
+          x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
+          
+          # 仮想ディスプレイでVNCサーバー起動
+          x11vnc -create -forever -shared -rfbauth ~/.vnc/passwd -rfbport 5900 &
+          sleep 5
 
       - name: Setup noVNC (Web-based VNC)
         run: |
-          # noVNCをセットアップ（ブラウザからアクセス可能）
-          git clone https://github.com/novnc/noVNC.git
+          # noVNCをセットアップ
+          git clone --depth 1 https://github.com/novnc/noVNC.git
           cd noVNC
-
+          
           # WebSocketプロキシを起動
           ./utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
+          sleep 3
 
-      - name: Create Virtual Display
+      - name: Setup ngrok and Get URLs
         run: |
-          # 仮想ディスプレイを作成（ヘッドレス環境用）
-          brew install xquartz
-
-          # Xvfbを使って仮想ディスプレイ作成
-          Xvfb :99 -screen 0 1024x768x24 &
-          export DISPLAY=:99
-
-      - name: Setup x11vnc
-        run: |
-          # x11vncをインストール（X11用VNCサーバー）
-          brew install x11vnc
-
-          # パスワードファイルを作成
-          x11vnc -storepasswd "${{ secrets.VNC_PASSWORD }}" ~/.vnc/passwd
-
-          # x11vncを起動
-          x11vnc -display :99 -forever -shared -rfbauth ~/.vnc/passwd -rfbport 5900 &
-
-      - name: Setup ngrok
-        run: |
-          # ngrokインストール
+          # ngrokインストールと認証
           brew install ngrok
-
-          # 認証
           ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-
-          # HTTPトンネル（noVNC用）
+          
+          # トンネル起動
           ngrok http 6080 > /tmp/ngrok-http.log 2>&1 &
-
-          # TCPトンネル（直接VNC用）  
+          sleep 5
           ngrok tcp 5900 > /tmp/ngrok-tcp.log 2>&1 &
-
-          sleep 10
-
-      - name: Display Access Info
-        run: |
+          sleep 5
+          
+          # URL取得
+          WEB_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.config.addr=="http://localhost:6080") | .public_url' | head -1)
+          VNC_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.config.addr=="localhost:5900") | .public_url' | head -1)
+          
+          # GitHub Job Summaryに表示
+          echo "## 🖥️ Remote Access URLs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Web Browser Access (Recommended)" >> $GITHUB_STEP_SUMMARY
+          echo "URL: \`$WEB_URL\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔌 Direct VNC Access" >> $GITHUB_STEP_SUMMARY
+          echo "URL: \`$VNC_URL\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Password:** Use your VNC_PASSWORD secret" >> $GITHUB_STEP_SUMMARY
+          
+          # コンソールにも表示
           echo "=========================================="
-          echo "Access Information:"
-          echo "------------------------------------------"
-          echo "1. Web VNC (noVNC):"
-          curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="https") | .public_url' || echo "Waiting for HTTP tunnel..."
-          echo ""
-          echo "2. Direct VNC:"
-          curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="tcp") | .public_url' || echo "Waiting for TCP tunnel..."
-          echo ""
-          echo "Password: (your VNC_PASSWORD)"
+          echo "🌐 Web Browser Access: $WEB_URL"
+          echo "🔌 Direct VNC Access: $VNC_URL"
+          echo "🔑 Password: Your VNC_PASSWORD"
           echo "=========================================="
 
-      - name: Alternative - Use Chrome Remote Desktop
+      - name: Keep Alive with Status
         run: |
-          # Chrome Remote Desktopのヘッドレス版をセットアップ
-          # これは概念的なコードです
-          echo "Chrome Remote Desktop setup would go here..."
-
-      - name: Keep Alive
-        run: |
-          # プロセス監視しながら維持
+          START_TIME=$(date +%s)
+          
           while true; do
-            echo "=== Status Check: $(date) ==="
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$(( (CURRENT_TIME - START_TIME) / 60 ))
             
-            # VNCプロセス確認
-            ps aux | grep -E "(vnc|x11vnc)" | grep -v grep || echo "VNC process not found!"
+            echo "[$(date '+%H:%M:%S')] Running for $ELAPSED minutes"
             
-            # ngrok状態
-            echo "Active tunnels:"
-            curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[] | "\(.proto): \(.public_url)"' || echo "ngrok not responding"
+            # プロセス確認（エラー出力を抑制）
+            if pgrep x11vnc > /dev/null; then
+              echo "✅ VNC server is running"
+            else
+              echo "❌ VNC server stopped - restarting..."
+              x11vnc -create -forever -shared -rfbauth ~/.vnc/passwd -rfbport 5900 &
+            fi
             
             # 5分待機
             sleep 300
